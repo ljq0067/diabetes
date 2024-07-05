@@ -1,0 +1,216 @@
+---
+title: "Symptom"
+author: "Jieqian Liu"
+date: "6/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Collection
+
+```{r}
+# load packages
+library(tidytext)
+library(NLP)
+library(RedditExtractoR)
+library(tidyverse)
+library(stringr)
+library(htmlwidgets)
+```
+
+#### Type 1 Diabetes
+
+```{r}
+keyword = c("pee", "thirsty", "weight", "hungry", "vision", "tired", "dry")
+
+# get dataset for symptoms of type 1 diabetes, like pee, thirsty, lose weight, hungry, blurry vision, tired, dry skin...
+reddit_diabetes_urls1 <- find_thread_urls(keyword = "pee", subreddit = "diabetes_t1", sort_by = "top")
+reddit_diabetes_threads1 <- get_thread_content(reddit_diabetes_urls1$url)$threads
+
+reddit_diabetes_urls11 <- find_thread_urls(keyword = "pee", subreddit = "Type1Diabetes", sort_by = "top")
+reddit_diabetes_threads11 <- get_thread_content(reddit_diabetes_urls11$url)$threads
+
+reddit_diabetes_t1 = union(reddit_diabetes_threads1, reddit_diabetes_threads11)
+reddit_diabetes_t1 = reddit_diabetes_t1[,-c(1,4,7,9:10,12:14)]
+reddit_diabetes_t1$symptoms = "pee"
+```
+
+```{r}
+write_csv(reddit_diabetes_t1, "type1_symptom.csv")
+```
+
+#### Type 2 Diabetes
+
+```{r}
+# get dataset
+reddit_diabetes_urls2 <- find_thread_urls(keyword = "pee", subreddit = "diabetes_t2", sort_by = "top")
+reddit_diabetes_threads2 <- get_thread_content(reddit_diabetes_urls2$url)$threads
+
+reddit_diabetes_urls22 <- find_thread_urls(keyword = "pee", subreddit = "Type2Diabetes", sort_by = "top")
+reddit_diabetes_threads22 <- get_thread_content(reddit_diabetes_urls22$url)$threads
+
+reddit_diabetes_t2 = union(reddit_diabetes_threads2, reddit_diabetes_threads22)
+reddit_diabetes_t2 = reddit_diabetes_t2[,-c(1,4,7,9:10,12:14)]
+reddit_diabetes_t2$symptoms = "pee"
+```
+
+```{r}
+write_csv(reddit_diabetes_t2, "type2_symptom.csv")
+```
+
+## Data Process
+
+```{r}
+reddit_diabetes_t1 = read_csv("type1_symptom.csv")
+reddit_diabetes_t2 = read_csv("type2_symptom.csv")
+
+tidy_threads_t1 <- reddit_diabetes_t1 %>% select(author, text, symptoms) %>%
+  unnest_tokens("word", text) %>% anti_join(stop_words)
+
+top_words_t1 <-
+  tidy_threads_t1 %>% anti_join(stop_words) %>%
+  group_by(symptoms) %>%
+  count(word) %>% 
+  arrange(desc(n))
+top_words_t1 = top_words_t1[!is.finite(as.numeric(as.character(top_words_t1$word))),] %>% drop_na()
+
+tidy_threads_t2 <- reddit_diabetes_t2 %>% select(author, text, symptoms) %>%
+  unnest_tokens("word", text) %>% anti_join(stop_words)
+
+top_words_t2 <-
+  tidy_threads_t2 %>% anti_join(stop_words) %>%
+  group_by(symptoms) %>%
+  count(word) %>% 
+  arrange(desc(n))
+top_words_t2 = top_words_t2[!is.finite(as.numeric(as.character(top_words_t2$word))),] %>% drop_na()
+
+```
+
+## Topic Modeling
+
+```{r}
+library(topicmodels)
+# Type 1
+symptom_t1_dtm <- top_words_t1 %>% cast_dtm(symptoms, word, n)
+
+symptom_t1_lda <- LDA(symptom_t1_dtm, k = 7, control = list(seed = 1234))
+
+symptom_t1_topics <- tidy(symptom_t1_lda, matrix = "beta")
+
+top_terms <- symptom_t1_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 5) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+
+library(ggplot2)
+library(ggpubr)
+
+p1 = top_terms %>%
+      mutate(term = reorder_within(term, beta, topic)) %>%
+      ggplot(aes(beta, term, fill = factor(topic))) +
+      geom_col(show.legend = FALSE) +
+      facet_wrap(~ topic, scales = "free") +
+      scale_y_reordered() + theme(axis.text.x=element_text(angle=90, hjust=1))
+
+# Type 2
+symptom_t2_dtm <- top_words_t2 %>% cast_dtm(symptoms, word, n)
+
+symptom_t2_lda <- LDA(symptom_t2_dtm, k = 7, control = list(seed = 1234))
+
+symptom_t2_topics <- tidy(symptom_t2_lda, matrix = "beta")
+
+top_terms <- symptom_t2_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 5) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+
+p2 = top_terms %>%
+      mutate(term = reorder_within(term, beta, topic)) %>%
+      ggplot(aes(beta, term, fill = factor(topic))) +
+      geom_col(show.legend = FALSE) +
+      facet_wrap(~ topic, scales = "free") +
+      scale_y_reordered() + theme(axis.text.x=element_text(angle=90, hjust=1))
+
+ggarrange(p1,p2, labels = c("Type 1", "Type 2"), ncol =2)
+```
+
+```{r}
+symptom_t1_gamma <- tidy(symptom_t1_lda, matrix = "gamma")
+
+symptom_t1_classifications <- symptom_t1_gamma %>%
+  group_by(document) %>%
+  slice_max(gamma) %>%
+  ungroup()
+
+symptom_t1_topics <- symptom_t1_classifications %>%
+  count(document, topic) %>%
+  group_by(document) %>%
+  slice_max(n, n = 1) %>% 
+  ungroup() %>%
+  transmute(consensus = document, topic)
+
+assignments <- augment(symptom_t1_lda, data = symptom_t1_dtm)
+
+assignments <- assignments %>% inner_join(symptom_t1_topics, by = c(".topic" = "topic"))
+
+library(scales)
+
+assignments %>%
+  count(document, consensus, wt = count) %>%
+  mutate(across(c(document, consensus), ~str_wrap(., 20))) %>%
+  group_by(document) %>%
+  mutate(percent = n / sum(n)) %>%
+  ggplot(aes(consensus, document, fill = percent)) +
+  geom_tile() +
+  scale_fill_gradient2(high = "darkred", label = percent_format()) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid = element_blank()) +
+  labs(x = "Symptom words were assigned to",
+       y = "Symptom words came from",
+       fill = "% of assignments",
+       title = "Topic Modeling Accurancy for Type1 Diabetes")
+```
+
+```{r}
+symptom_t2_gamma <- tidy(symptom_t2_lda, matrix = "gamma")
+
+symptom_t2_classifications <- symptom_t2_gamma %>%
+  group_by(document) %>%
+  slice_max(gamma) %>%
+  ungroup()
+
+symptom_t2_topics <- symptom_t2_classifications %>%
+  count(document, topic) %>%
+  group_by(document) %>%
+  slice_max(n, n = 1) %>% 
+  ungroup() %>%
+  transmute(consensus = document, topic)
+
+assignments <- augment(symptom_t1_lda, data = symptom_t1_dtm)
+
+assignments <- assignments %>% inner_join(symptom_t2_topics, by = c(".topic" = "topic"))
+
+library(scales)
+
+assignments %>%
+  count(document, consensus, wt = count) %>%
+  mutate(across(c(document, consensus), ~str_wrap(., 20))) %>%
+  group_by(document) %>%
+  mutate(percent = n / sum(n)) %>%
+  ggplot(aes(consensus, document, fill = percent)) +
+  geom_tile() +
+  scale_fill_gradient2(high = "darkred", label = percent_format()) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid = element_blank()) +
+  labs(x = "Symptom words were assigned to",
+       y = "Symptom words came from",
+       fill = "% of assignments",
+       title = "Topic Modeling Accurancy for Type2 Diabetes")
+```

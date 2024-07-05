@@ -1,0 +1,387 @@
+---
+title: "reddit"
+author: "Jieqian Liu"
+date: "5/26/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load
+
+```{r}
+# load packages
+library(tidytext)
+library(NLP)
+library(RedditExtractoR)
+library(tidyverse)
+library(stringr)
+library(htmlwidgets)
+```
+
+
+## Data Collection and Cleaning
+
+```{r}
+# get dataset
+reddit_diabetes_urls <- find_thread_urls(keywords = "diabetes", subreddit = "diabetes", sort_by = "comments")
+reddit_diabetes_threads <- get_thread_content(reddit_diabetes_urls$url)$threads
+reddit_diabetes_comments <- get_thread_content(reddit_diabetes_urls$url)$comments
+```
+
+```{r}
+# get dataset
+reddit_diabetes_urls1 <- find_thread_urls(subreddit = "diabetes_t1", sort_by = "top")
+reddit_diabetes_threads1 <- get_thread_content(reddit_diabetes_urls1$url)$threads
+
+reddit_diabetes_urls11 <- find_thread_urls(subreddit = "Type1Diabetes", sort_by = "top")
+reddit_diabetes_threads11 <- get_thread_content(reddit_diabetes_urls11$url)$threads
+
+reddit_diabetes_t1 = union(reddit_diabetes_threads1, reddit_diabetes_threads11)
+reddit_diabetes_t1 = reddit_diabetes_t1[,-c(1,4,7,9:10,12:14)]
+```
+
+```{r}
+# get dataset
+reddit_diabetes_urls2 <- find_thread_urls(subreddit = "diabetes_t2", sort_by = "top")
+reddit_diabetes_threads2 <- get_thread_content(reddit_diabetes_urls2$url)$threads
+
+reddit_diabetes_urls22 <- find_thread_urls(subreddit = "Type2Diabetes", sort_by = "top")
+reddit_diabetes_threads22 <- get_thread_content(reddit_diabetes_urls22$url)$threads
+
+reddit_diabetes_t2 = union(reddit_diabetes_threads2, reddit_diabetes_threads22)
+reddit_diabetes_t2 = reddit_diabetes_t2[,-c(1,4,7,9:10,12:14)]
+```
+
+```{r}
+# delete unused column and rename column
+reddit_diabetes_comments = reddit_diabetes_comments[,-c(4,6:8,10)]
+reddit_diabetes_comments = rename(reddit_diabetes_comments, commenter=author, comment_date=date)
+reddit_diabetes_threads = reddit_diabetes_threads[,-c(4,7,9:10,12:14)]
+reddit_diabetes_threads = rename(reddit_diabetes_threads, text_score=score, comment_num=comments, post_date=date)
+```
+
+```{r}
+# join together and delete url column
+reddit_diabetes = full_join(reddit_diabetes_threads, reddit_diabetes_comments, by = "url")
+reddit_diabetes = reddit_diabetes[,-1]
+reddit_diabetes_comments = reddit_diabetes_comments[,-1]
+reddit_diabetes_threads = reddit_diabetes_threads[,-1]
+
+# sum(is.na(reddit_diabetes)) = 0
+```
+
+```{r}
+# save files to csv
+write_csv(reddit_diabetes, "reddit_diabetes.csv")
+write_csv(reddit_diabetes_comments, "reddit_diabetes_comments.csv")
+write_csv(reddit_diabetes_threads, "reddit_diabetes_threads.csv")
+
+write_csv(reddit_diabetes_t1, "type1Diabetes.csv")
+write_csv(reddit_diabetes_t2, "type2Diabetes.csv")
+```
+
+## Data Visualization
+
+```{r}
+#reddit_diabetes = read_csv("reddit_diabetes.csv")
+reddit_diabetes_comments = read_csv("reddit_diabetes_comments.csv")
+reddit_diabetes_threads  =read_csv("reddit_diabetes_threads.csv")
+
+# convert from full text to token per row with the unnest_tokens()
+tidy_comments <- reddit_diabetes_comments %>% select(commenter, comment) %>%
+  unnest_tokens("word", comment) %>% anti_join(stop_words)
+
+tidy_threads <- reddit_diabetes_threads %>% select(author, text) %>%
+  unnest_tokens("word", text) %>% anti_join(stop_words)
+
+#create a data frame from the Reddit_Diabetes dataset with its top words
+top_words_comments <-
+  tidy_comments %>% anti_join(stop_words) %>%
+  count(word) %>% 
+  arrange(desc(n))
+# delete number rows
+top_words_comments = top_words_comments[!is.finite(as.numeric(as.character(top_words_comments$word))),]
+
+top_words_threads <-
+  tidy_threads %>% anti_join(stop_words) %>%
+  count(word) %>% 
+  arrange(desc(n))
+
+top_words_threads = top_words_threads[!is.finite(as.numeric(as.character(top_words_threads$word))),]
+```
+
+```{r, warning=FALSE}
+#wordCloud
+library(reshape2) 
+library(wordcloud)
+top_words = union(top_words_threads[1:101,], top_words_comments[1:100,])
+top_words$source = "comment"
+top_words[1:100,]$source = "threads"
+top_words %>% drop_na() %>% acast(word ~ source, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("purple", "orange"),
+                   max.words = 200)
+
+```
+
+## Sentiment Analysis
+
+#### AFINN
+
+```{r}
+#The AFINN lexicon assigns words with a score that runs between -5(very negative) and  5 (very positive)
+tidy_threads1 <- reddit_diabetes_threads %>% select(author, date, text) %>%
+  unnest_tokens("word", text) %>% anti_join(stop_words)
+
+author_afin <- tidy_threads1 %>% 
+  group_by(author,date)%>%
+  inner_join(get_sentiments("afinn")) %>%
+  summarize(total_score = sum(value)) %>%
+  ungroup()
+
+```
+
+```{r}
+
+library(plotly)
+fig <- plot_ly()
+steps = list()
+post_date = unique(author_afin$date) %>% sort()
+for (i in 1:31){
+  fig <- fig %>% add_trace(type='bar', x=author_afin[author_afin$date==post_date[i],]$author, y=author_afin[author_afin$date==post_date[i],]$total_score, name=post_date[i])
+  
+  step <- list(args = list('visible', rep(FALSE, nrow(author_afin))),
+               method = 'restyle', label=unlist(post_date[i]))
+  step$args[[2]][i] = TRUE
+  steps[[i]] = step
+}
+
+# add slider control to plot
+fig <- fig %>%
+  layout(sliders = list(list(active = 0,
+                        currentvalue = list(prefix = "Date: "),
+                        steps = steps)), title="Sentiment Score For People In A Month",
+         margin = list(l=150, r=20, b=30, t=80))
+fig
+saveWidget(fig, "sentiment_AFINN.html")
+# maybe to see a long time
+```
+
+#### NRC
+
+```{r}
+author_nrc <- tidy_threads %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(author, word, sentiment, sort= TRUE) %>%
+    ungroup()
+
+commenter_nrc <- tidy_comments %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(commenter, word, sentiment, sort= TRUE) %>%
+    ungroup() %>% filter(n>10)
+
+```
+
+Obviously, positive comment words seems to be more than negative. For those who wrote many comments, we can see the specify sentiments for people.
+
+```{r}
+author_nrc2 = author_nrc %>% group_by(author, sentiment) %>% filter(n > 1)
+
+commenter_nrc2 = commenter_nrc %>% group_by(commenter, sentiment)
+
+library(circlepackeR)
+library(data.tree)
+
+author_nrc2$pathString <- paste("world", author_nrc2$sentiment, author_nrc2$author,author_nrc2$word, sep = "/")
+author <- as.Node(author_nrc2)
+p1= circlepackeR(author, size = "n")
+
+commenter_nrc2$pathString <- paste("world", commenter_nrc2$sentiment, commenter_nrc2$commenter, commenter_nrc2$word,commenter_nrc2$n, sep = "/")
+commenter <- as.Node(commenter_nrc2)
+p2 = circlepackeR(commenter, size = "n")
+
+library(manipulateWidget)
+p=combineWidgets(p1,p2, nrow = 1, title = "Specific Author(left) and Commenter(Right) Words in Sentimel Category")
+p
+saveWidget(p, file="circlepackeR.html")
+```
+
+```{r}
+library(collapsibleTree)
+commenter_nrc2 = commenter_nrc %>% group_by(commenter, sentiment)
+# People's Comment in Sentimel Category
+p = collapsibleTreeSummary(commenter_nrc2, c("commenter", "sentiment", "word"), nodeSize = "n", attribute = "n")
+p
+saveWidget(p, file="collapsibleTree.html")
+```
+
+## ARM
+
+```{r}
+tidy_comments = rename(tidy_comments, author = commenter)
+tidy_words = union(tidy_threads, tidy_comments) %>% pivot_wider(names_from = word, values_from = word)
+library(arules)
+# 0.005 200 records
+RedditTrans_rules = arules::apriori(tidy_words,
+                                   parameter = list(support=.006,
+                                    conf=.006, minlen=2, maxtime=0, maxlen=20))
+```
+
+```{r}
+inspect(RedditTrans_rules[1:20])
+Rules_DF2<-DATAFRAME(RedditTrans_rules[1:100], separate = TRUE)
+## Remove all {}
+Rules_DF2[] <- lapply(Rules_DF2, gsub, pattern='[{}]', replacement='')
+LHS = unlist(strsplit(as.character(Rules_DF2$LHS), split = "="))
+factor = as.data.frame(LHS)
+RHS = unlist(strsplit(as.character(Rules_DF2$RHS), split = "="))
+factor$TargetName = RHS
+factor = factor[seq(1,nrow(factor),2),]
+factor$Weight = Rules_DF2$coverage
+
+factor <- rename(factor, SourseName = LHS)
+head(factor,30)
+```
+
+```{r}
+library(arulesViz)
+library(plotly)
+
+p <- plot(RedditTrans_rules, max=50, method = "graph",  engine = "htmlwidget")
+htmlwidgets::saveWidget(as_widget(p), "network.html")
+
+library(igraph)
+edgeList<-factor
+MyGraph <- igraph::simplify(igraph::graph.data.frame(edgeList, directed=TRUE))
+write_graph(MyGraph, "support.html")
+plot(MyGraph)
+```
+
+```{r}
+library(networkD3)
+
+edgeList<-factor
+MyGraph <- igraph::simplify(igraph::graph.data.frame(edgeList, directed=TRUE))
+
+nodeList <- data.frame(ID = c(0:(igraph::vcount(MyGraph) - 1)), 
+                       nName = igraph::V(MyGraph)$name)
+
+
+## Node Degree
+nodeList <- cbind(nodeList, nodeDegree=igraph::degree(MyGraph, 
+            v = igraph::V(MyGraph), mode = "all"))
+
+## Betweenness
+BetweenNess <- igraph::betweenness(MyGraph, 
+                                   v = igraph::V(MyGraph), 
+                                   directed = TRUE)
+
+nodeList <- cbind(nodeList, nodeBetweenness=BetweenNess)
+
+getNodeID <- function(x){
+  which(x == igraph::V(MyGraph)$name) - 1  #IDs start at 0
+}
+
+edgeList <- plyr::ddply(
+  factor, .variables = c("SourseName", "TargetName" , "Weight"), 
+  function (x) data.frame(SourceID = getNodeID(x$SourseName), 
+                          TargetID = getNodeID(x$TargetName)))
+
+graph <- networkD3::sankeyNetwork(Links = edgeList, 
+                         Nodes = nodeList, 
+                         Source = "SourceID",
+                         Target = "TargetID", 
+                         Value = "Weight", 
+                         NodeID = "nName",
+                         fontSize = 14)
+networkD3::saveNetwork(graph, 
+                       "sankey.html", selfcontained = TRUE)
+networkD3::sankeyNetwork(Links = edgeList, 
+                         Nodes = nodeList, 
+                         Source = "SourceID",
+                         Target = "TargetID", 
+                         Value = "Weight", 
+                         NodeID = "nName",
+                         fontSize = 14)
+```
+
+```{r}
+(MyD3<-networkD3::forceNetwork(Links = edgeList, 
+                               Nodes = nodeList, 
+                               Source = "SourceID",
+                               Target = "TargetID", 
+                               Value = "Weight", 
+                               NodeID = "nName",
+                               Group = "nodeDegree", 
+                               opacity = 0.9,
+                               legend = T,
+                               bounded = T
+))
+
+networkD3::saveNetwork(MyD3, "force_network.html", selfcontained = TRUE)
+```
+
+## Compare
+
+```{r}
+library(reshape2) 
+library(wordcloud)
+
+top_words = rbind(top_words_threads_t1[1:100,], top_words_threads_t2[1:100,])
+top_words$source = "type2"
+top_words[1:100,]$source = "type1"
+top_words %>% drop_na() %>% acast(word ~ source, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("purple", "orange"),
+                   max.words = 200)
+```
+
+```{r}
+author_nrc1 <- tidy_threads_t1 %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(author, word, sentiment, sort= TRUE) %>%
+    ungroup()
+
+author_nrc2 <- tidy_threads_t2 %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(author, word, sentiment, sort= TRUE) %>%
+    ungroup()
+
+author_nrc1 = author_nrc1 %>% group_by(author, sentiment) %>% filter(n > 1)
+
+author_nrc2 = author_nrc2 %>% group_by(author, sentiment) %>% filter(n > 1)
+```
+
+```{r}
+library(circlepackeR)
+library(data.tree)
+
+author_nrc1$pathString <- paste("world", author_nrc1$sentiment, author_nrc1$author,author_nrc1$word, sep = "/")
+author <- as.Node(author_nrc1)
+p1 = circlepackeR(author, size = "n")
+
+author_nrc2$pathString <- paste("world", author_nrc2$sentiment, author_nrc2$author,author_nrc2$word, sep = "/")
+author <- as.Node(author_nrc2)
+p2 = circlepackeR(author, size = "n")
+
+library(manipulateWidget)
+p=combineWidgets(p1,p2, nrow = 1, title = "Specific Type-1(left) and Type-2(Right) Diabetes Words in Sentimel Category")
+p
+saveWidget(p, file="typeCompare.html")
+```
+
+```{r}
+library(collapsibleTree)
+
+# People's Comment in Sentimel Category
+author_nrc = union(author_nrc1, author_nrc2)
+author_nrc$type = "type2 Diabetes"
+author_nrc$type[1:1951] = "type1 Diabetes"
+author_nrc = author_nrc %>% filter(n>5)
+# author_nrc <- author_nrc[c(5,1,3,2,4)]
+p = collapsibleTreeSummary(author_nrc, c("type","author", "sentiment", "word"), nodeSize = "n", attribute = "n")
+p
+saveWidget(p, file="collapsibleTree.html")
+```
+
