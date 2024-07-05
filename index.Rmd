@@ -1,0 +1,29 @@
+---
+title: "index"
+author: "Jieqian Liu"
+date: "2024-07-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## INDEX
+
+- [circlepackeR](circlepackeR.html)
+- [collapsibleTree](collapsibleTree.html)
+- [sankey](sankey.html)
+- [force_network](force_network.html)
+- [sentiment_AFINN](sentiment_AFINN.html)
+- [network](network.html)
+- [typeCompare](typeCompare.html)
+- [symptom](symptom.html)
+
+## DATA
+- [reddit_diabetes_comments](reddit_diabetes_comments.csv)
+- [reddit_diabetes_threads](reddit_diabetes_threads.csv)
+- [type1_Diabetes](type1Diabetes.csv)
+- [type1_symptom](type1_symptom.csv)
+- [type2_Diabetes](type2Diabetes.csv)
+- [type2_symptom](type2_symptom.csv)
